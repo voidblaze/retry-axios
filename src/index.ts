@@ -81,6 +81,11 @@ function onFulfilled(res: AxiosResponse) {
   return res;
 }
 
+// tslint:disable-next-line no-any
+const values = (objOrArray: {[key: string]: any}) => {
+  return Object.keys(objOrArray).map((key: string) => objOrArray[key]);
+};
+
 function onError(err: AxiosError) {
   const config = (err.config as RaxConfig).raxConfig || {};
   config.currentRetryAttempt = config.currentRetryAttempt || 0;
@@ -88,8 +93,8 @@ function onError(err: AxiosError) {
       (config.retry === undefined || config.retry === null) ? 3 : config.retry;
   config.retryDelay = config.retryDelay || 100;
   config.instance = config.instance || axios;
-  config.httpMethodsToRetry =
-      config.httpMethodsToRetry || ['GET', 'HEAD', 'PUT', 'OPTIONS', 'DELETE'];
+  config.httpMethodsToRetry = values(
+      config.httpMethodsToRetry || ['GET', 'HEAD', 'PUT', 'OPTIONS', 'DELETE']);
   config.noResponseRetries = (config.noResponseRetries === undefined ||
                               config.noResponseRetries === null) ?
       2 :
@@ -107,7 +112,8 @@ function onError(err: AxiosError) {
     // 5xx - Retry (Server errors)
     [100, 199], [429, 429], [500, 599]
   ];
-  config.statusCodesToRetry = config.statusCodesToRetry || retryRanges;
+  config.statusCodesToRetry =
+      values(config.statusCodesToRetry || retryRanges).map(values);
 
   // Put the config back into the err
   (err.config as RaxConfig).raxConfig = config;
@@ -118,25 +124,27 @@ function onError(err: AxiosError) {
     return Promise.reject(err);
   }
 
-  // Calculate time to wait with exponential backoff.
-  // Formula: (2^c - 1 / 2) * 1000
-  const delay = (Math.pow(2, config.currentRetryAttempt) - 1) / 2 * 1000;
-
-  // We're going to retry!  Incremenent the counter.
-  (err.config as RaxConfig).raxConfig!.currentRetryAttempt! += 1;
-
   // Create a promise that invokes the retry after the backOffDelay
-  const backoff = new Promise(resolve => {
+  const onBackoffPromise = new Promise((resolve) => {
+    // Calculate time to wait with exponential backoff.
+    // Formula: (2^c - 1 / 2) * 1000
+    const delay = (Math.pow(2, config.currentRetryAttempt!) - 1) / 2 * 1000;
+
+    // We're going to retry!  Incremenent the counter.
+    (err.config as RaxConfig).raxConfig!.currentRetryAttempt! += 1;
     setTimeout(resolve, delay);
   });
 
   // Notify the user if they added an `onRetryAttempt` handler
-  if (config.onRetryAttempt) {
-    config.onRetryAttempt(err);
-  }
+  const onRetryAttemptPromise = (config.onRetryAttempt) ?
+      Promise.resolve(config.onRetryAttempt(err)) :
+      Promise.resolve();
 
   // Return the promise in which recalls axios to retry the request
-  return backoff.then(() => config.instance!.request(err.config));
+  return Promise.resolve()
+      .then(() => onBackoffPromise)
+      .then(() => onRetryAttemptPromise)
+      .then(() => config.instance!.request(err.config));
 }
 
 /**
